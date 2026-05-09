@@ -1,7 +1,7 @@
 import { SignedIn, useClerk, useUser } from '@clerk/clerk-react';
-import { ArrowLeft, BadgeCheck, CreditCard, Mail, ShieldCheck, Sparkles, UserRound } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, CreditCard, Edit3, LogOut, Mail, Save, ShieldCheck, Sparkles, UserRound } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface SettingsViewProps {
   isDarkMode: boolean;
@@ -33,10 +33,30 @@ const formatMetadataSource = (value: unknown) => {
   return value.toLowerCase() === 'admin' ? 'Role Clerk' : 'Metadata Clerk';
 };
 
+const getPlanSummary = (plan: string) => {
+  if (plan === 'Gratuit') {
+    return 'Vous explorez MindMesh avec les fonctions essentielles et vos conversations sont conservées dans votre espace.';
+  }
+
+  if (plan === 'Pro') {
+    return 'Votre abonnement Pro active les options avancées et vous donne plus de marge pour travailler sans interruption.';
+  }
+
+  if (plan === 'Premium') {
+    return 'Votre plan Premium vous offre un espace plus confortable pour un usage intensif et des tâches plus longues.';
+  }
+
+  return `Votre plan ${plan} est celui qui définit vos accès et votre rythme d'utilisation.`;
+};
+
 export default function SettingsView({ isDarkMode, onNavigate }: SettingsViewProps) {
   const { user, isLoaded } = useUser();
   const { signOut } = useClerk();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
 
   const displayName = user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Utilisateur MindMesh';
   const email = user?.primaryEmailAddress?.emailAddress || user?.emailAddresses[0]?.emailAddress || 'Email indisponible';
@@ -49,6 +69,37 @@ export default function SettingsView({ isDarkMode, onNavigate }: SettingsViewPro
     .map((part) => part[0]?.toUpperCase())
     .join('')
     .slice(0, 2) || 'M';
+
+  useEffect(() => {
+    setFirstName(user?.firstName || '');
+    setLastName(user?.lastName || '');
+    setProfileMessage(null);
+  }, [user?.firstName, user?.lastName]);
+
+  const handleProfileSave = async () => {
+    if (!user) return;
+
+    setIsSavingProfile(true);
+    setProfileMessage(null);
+
+    try {
+      const nextPayload: { firstName?: string; lastName?: string } = {};
+      const trimmedFirstName = firstName.trim();
+      const trimmedLastName = lastName.trim();
+
+      if (trimmedFirstName) nextPayload.firstName = trimmedFirstName;
+      if (trimmedLastName) nextPayload.lastName = trimmedLastName;
+
+      await user.update(nextPayload);
+      await user.reload();
+      setProfileMessage({ tone: 'success', text: 'Vos informations personnelles ont été mises à jour.' });
+    } catch (error) {
+      console.error('Profil non mis a jour:', error);
+      setProfileMessage({ tone: 'error', text: 'La mise à jour du profil a échoué. Réessayez plus tard.' });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   return (
     <div className={`relative min-h-dvh overflow-hidden ${isDarkMode ? 'bg-[var(--background)] text-[var(--text)]' : 'bg-[var(--background)] text-[var(--text)]'}`}>
@@ -104,8 +155,8 @@ export default function SettingsView({ isDarkMode, onNavigate }: SettingsViewPro
                     disabled={isSigningOut}
                     className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-xs font-semibold transition-colors disabled:opacity-70 ${isDarkMode ? 'border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500/20' : 'border-red-100 bg-red-50 text-red-600 hover:bg-red-100'}`}
                   >
-                    <Sparkles className="h-4 w-4" />
-                    {isSigningOut ? 'Déconnexion en cours...' : 'Deconnexion'}
+                    <LogOut className="h-4 w-4" />
+                    {isSigningOut ? 'Déconnexion en cours...' : 'Déconnexion'}
                   </button>
                 </div>
               </div>
@@ -206,13 +257,13 @@ export default function SettingsView({ isDarkMode, onNavigate }: SettingsViewPro
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
-                            Statut detecte
+                            Aperçu du plan
                           </p>
                           <p className={`mt-2 text-3xl font-semibold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                             {currentPlan}
                           </p>
                           <p className={`mt-3 text-sm leading-6 ${isDarkMode ? 'text-white/55' : 'text-slate-600'}`}>
-                            Le plan est lu depuis `publicMetadata.plan_type` puis `publicMetadata.role` pour rester compatible avec la migration future vers la base de donnees.
+                            {getPlanSummary(currentPlan)}
                           </p>
                         </div>
 
@@ -225,21 +276,74 @@ export default function SettingsView({ isDarkMode, onNavigate }: SettingsViewPro
                         <div className={`rounded-3xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-100 bg-white'}`}>
                           <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
                             <ShieldCheck className="h-3.5 w-3.5" />
-                            Source
+                            Votre rythme
                           </div>
                           <p className={`mt-2 text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            {planSource}
+                            {currentPlan === 'Gratuit' ? 'Idéal pour découvrir MindMesh et tester vos premières conversations.' : `Pensé pour les utilisateurs qui exploitent le plan ${currentPlan}.`}
                           </p>
                         </div>
                         <div className={`rounded-3xl border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-100 bg-white'}`}>
                           <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
                             <Sparkles className="h-3.5 w-3.5" />
-                            A venir
+                            Accès
                           </div>
                           <p className={`mt-2 text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            Synchronisation DB `plan_type`
+                            {currentPlan === 'Gratuit' ? 'Fonctions essentielles activées' : 'Avantages adaptés à votre abonnement'}
                           </p>
                         </div>
+                      </div>
+                    </div>
+
+                    <div className={`mt-6 rounded-[28px] border p-6 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-100 bg-white'}`}>
+                      <div className="flex items-center gap-2">
+                        <Edit3 className={`h-4 w-4 ${isDarkMode ? 'text-purple-200' : 'text-purple-700'}`} />
+                        <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          Modifier mes informations personnelles
+                        </h3>
+                      </div>
+
+                      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                        <label className="block">
+                          <span className={`text-[10px] font-black uppercase tracking-[0.24em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                            Prénom
+                          </span>
+                          <input
+                            value={firstName}
+                            onChange={(event) => setFirstName(event.target.value)}
+                            className={`mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none transition-colors ${isDarkMode ? 'border-white/10 bg-white/5 text-white placeholder:text-white/30 focus:border-purple-400/40' : 'border-purple-100 bg-white text-slate-900 placeholder:text-slate-400 focus:border-purple-300'}`}
+                            placeholder="Votre prénom"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className={`text-[10px] font-black uppercase tracking-[0.24em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                            Nom
+                          </span>
+                          <input
+                            value={lastName}
+                            onChange={(event) => setLastName(event.target.value)}
+                            className={`mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none transition-colors ${isDarkMode ? 'border-white/10 bg-white/5 text-white placeholder:text-white/30 focus:border-purple-400/40' : 'border-purple-100 bg-white text-slate-900 placeholder:text-slate-400 focus:border-purple-300'}`}
+                            placeholder="Votre nom"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={handleProfileSave}
+                          disabled={isSavingProfile}
+                          className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-xs font-semibold transition-colors disabled:opacity-70 ${isDarkMode ? 'border-purple-400/30 bg-purple-500/15 text-purple-100 hover:bg-purple-500/25' : 'border-purple-200 bg-purple-600 text-white hover:bg-purple-700'}`}
+                        >
+                          <Save className="h-4 w-4" />
+                          {isSavingProfile ? 'Enregistrement...' : 'Enregistrer les changements'}
+                        </button>
+
+                        {profileMessage && (
+                          <p className={`text-sm ${profileMessage.tone === 'success' ? (isDarkMode ? 'text-green-200' : 'text-green-700') : (isDarkMode ? 'text-red-200' : 'text-red-600')}`}>
+                            {profileMessage.text}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </motion.section>

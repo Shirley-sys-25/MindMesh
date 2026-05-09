@@ -7,7 +7,7 @@ import { chatRateLimit } from '../middleware/rate-limit.js';
 import { parseChatRequest } from '../schemas/chat.schema.js';
 import { createLegacyChatStream } from '../services/openai.service.js';
 import { streamOrchestrator } from '../services/orchestrator-client.js';
-import { buildSessionSummaryText, getChatHistory, getSessionState, recordChatRequest, upsertSessionState } from '../services/database.service.js';
+import { buildSessionSummaryText, deleteConversationSession, getChatHistory, getSessionState, listConversationSessions, recordChatRequest, upsertSessionState } from '../services/database.service.js';
 import { decideOrchestrationPath } from '../services/orchestration-rollout.js';
 import { recordOrchestratorCall, recordProviderError } from '../services/metrics.service.js';
 import { AppError } from '../utils/errors.js';
@@ -77,6 +77,7 @@ const streamChatHandler = async (req, res, next) => {
         sessionSummary: summary,
         objectiveStep: sessionState.objectiveStep,
         objectiveProgress: sessionState.objectiveProgress,
+        objectiveHistory: sessionState.objectiveHistory,
       });
     } catch (error) {
       logger.warn({ err: error, request_id: req.requestId }, 'session_summary_refresh_failed');
@@ -244,6 +245,40 @@ chatRouter.get('/chat/history', authJwtMiddleware, async (req, res, next) => {
   }
 });
 
+chatRouter.get('/sessions', authJwtMiddleware, async (req, res, next) => {
+  try {
+    const sessions = await listConversationSessions({
+      userSub: req.auth?.sub,
+      limit: req.query.limit,
+    });
+
+    return res.json({
+      sessions,
+      count: sessions.length,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+chatRouter.delete('/sessions/:session_id', authJwtMiddleware, async (req, res, next) => {
+  try {
+    const sessionId = req.params.session_id;
+    const result = await deleteConversationSession({
+      sessionId,
+      userSub: req.auth?.sub,
+    });
+
+    return res.json({
+      ok: true,
+      deleted: result.deleted,
+      session_id: sessionId || null,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 chatRouter.get('/session-state', authJwtMiddleware, async (req, res, next) => {
   try {
     const sessionId = req.get('x-session-id') || req.query.session_id;
@@ -260,6 +295,7 @@ chatRouter.get('/session-state', authJwtMiddleware, async (req, res, next) => {
       active_tab: state.activeTab,
       objective_step: state.objectiveStep,
       objective_progress: state.objectiveProgress,
+      objective_history: state.objectiveHistory,
     });
   } catch (error) {
     return next(error);
@@ -275,6 +311,9 @@ chatRouter.put('/session-state', authJwtMiddleware, authorizeScope('chat:write')
     const activeTab = typeof req.body?.active_tab === 'string' ? req.body.active_tab : null;
     const objectiveStep = Number.isFinite(Number(req.body?.objective_step)) ? Number(req.body.objective_step) : 0;
     const objectiveProgress = Number.isFinite(Number(req.body?.objective_progress)) ? Number(req.body.objective_progress) : 0;
+    const objectiveHistory = Array.isArray(req.body?.objective_history)
+      ? req.body.objective_history.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 12)
+      : [];
 
     await upsertSessionState({
       sessionId,
@@ -285,6 +324,7 @@ chatRouter.put('/session-state', authJwtMiddleware, authorizeScope('chat:write')
       activeTab,
       objectiveStep,
       objectiveProgress,
+      objectiveHistory,
     });
 
     return res.json({
@@ -296,6 +336,7 @@ chatRouter.put('/session-state', authJwtMiddleware, authorizeScope('chat:write')
       active_tab: activeTab,
       objective_step: objectiveStep,
       objective_progress: objectiveProgress,
+      objective_history: objectiveHistory,
     });
   } catch (error) {
     return next(error);

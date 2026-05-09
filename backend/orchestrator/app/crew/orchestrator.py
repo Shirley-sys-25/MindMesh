@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from ..core.config import get_settings
 from .agents import build_agents
 from .tasks import build_task_prompt
+from ..tools import KnowledgeSearchTool
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,12 @@ logger = logging.getLogger(__name__)
 class MindMeshCrewOrchestrator:
     def __init__(self) -> None:
         self.agents = build_agents()
+        self.agent_specs = {agent["id"]: agent for agent in self.agents}
         self.settings = get_settings()
+        self.knowledge_tool = KnowledgeSearchTool()
+
+    def _agent_tools(self) -> list[KnowledgeSearchTool]:
+        return [self.knowledge_tool]
 
     @staticmethod
     def _latest_user_message(messages: list[dict[str, str]]) -> str:
@@ -56,27 +62,34 @@ class MindMeshCrewOrchestrator:
             except TypeError:
                 llm = LLM(**llm_kwargs, model_kwargs={"reasoning_effort": "high"})
 
+            afri_spec = self.agent_specs["AfriConnect"]
+            analyste_spec = self.agent_specs["Analyste Marche"]
+            stratege_spec = self.agent_specs["Stratege SEO"]
+
             afri_connect = Agent(
-                role="AfriConnect",
-                goal="Adapter le message au contexte local francophone et africain.",
-                backstory="Expert en adaptation linguistique et culturelle.",
+                role=afri_spec["role"],
+                goal=afri_spec["goal"],
+                backstory=afri_spec["backstory"],
                 llm=llm,
+                tools=self._agent_tools(),
                 allow_delegation=False,
                 verbose=False,
             )
             analyste_marche = Agent(
-                role="Analyste Marche",
-                goal="Identifier les opportunites actionnables pour l'objectif utilisateur.",
-                backstory="Analyste senior en positionnement de marche.",
+                role=analyste_spec["role"],
+                goal=analyste_spec["goal"],
+                backstory=analyste_spec["backstory"],
                 llm=llm,
+                tools=self._agent_tools(),
                 allow_delegation=False,
                 verbose=False,
             )
             stratege_seo = Agent(
-                role="Stratege SEO",
-                goal="Proposer une strategie SEO claire et mesurable.",
-                backstory="Specialiste en croissance organique et priorisation contenu.",
+                role=stratege_spec["role"],
+                goal=stratege_spec["goal"],
+                backstory=stratege_spec["backstory"],
                 llm=llm,
+                tools=self._agent_tools(),
                 allow_delegation=False,
                 verbose=False,
             )
@@ -163,10 +176,7 @@ class MindMeshCrewOrchestrator:
 
             stages = [
                 {
-                    "id": "africonnect",
-                    "role": "AfriConnect",
-                    "goal": "Adapter le message au contexte local francophone et africain.",
-                    "backstory": "Expert en adaptation linguistique et culturelle.",
+                    "id": "AfriConnect",
                     "description": (
                         "Analyse la demande utilisateur et produis un cadrage en francais avec "
                         "contexte, objectifs et contraintes implicites. "
@@ -175,10 +185,7 @@ class MindMeshCrewOrchestrator:
                     "expected_output": "Un cadrage concis en francais.",
                 },
                 {
-                    "id": "analyste_marche",
-                    "role": "Analyste Marche",
-                    "goal": "Identifier les opportunites actionnables pour l'objectif utilisateur.",
-                    "backstory": "Analyste senior en positionnement de marche.",
+                    "id": "Analyste Marche",
                     "description": (
                         "A partir du cadrage precedent, propose un plan d'action en 3 etapes avec "
                         "des priorites claires, hypotheses et indicateurs de succes. "
@@ -187,10 +194,7 @@ class MindMeshCrewOrchestrator:
                     "expected_output": "Un plan d'action en 3 etapes prioritaires.",
                 },
                 {
-                    "id": "stratege_seo",
-                    "role": "Stratege SEO",
-                    "goal": "Proposer une strategie SEO claire et mesurable.",
-                    "backstory": "Specialiste en croissance organique et priorisation contenu.",
+                    "id": "Stratege SEO",
                     "description": (
                         "Complete le plan avec une strategie contenu/SEO sur 30 jours: structure "
                         "des contenus, themes prioritaires, quick wins et prochaines actions. "
@@ -206,11 +210,13 @@ class MindMeshCrewOrchestrator:
             for stage in stages:
                 yield self._sse_block("agent_status", {"agent": stage["id"], "status": "working"})
 
+                agent_spec = self.agent_specs[stage["id"]]
                 agent = Agent(
-                    role=stage["role"],
-                    goal=stage["goal"],
-                    backstory=stage["backstory"],
+                    role=agent_spec["role"],
+                    goal=agent_spec["goal"],
+                    backstory=agent_spec["backstory"],
                     llm=llm,
+                    tools=self._agent_tools(),
                     allow_delegation=False,
                     verbose=False,
                 )

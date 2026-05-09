@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { AttachmentPreview, Message, SessionLog } from '../lib/appTypes';
 import { readErrorPayload } from '../lib/apiErrors';
 import {
+  buildConversationTitle,
   evaluatePromptSecurity,
   formatAttachmentSize,
   shrinkText,
@@ -32,6 +33,16 @@ interface UseChatPromptSenderArgs {
   setAgentStatuses: Dispatch<SetStateAction<Record<string, 'idle' | 'working'>>>;
   pushSessionLog: (logMessage: string, tone?: SessionLog['tone']) => void;
   getAuthorizationHeaders: () => Promise<Record<string, string>>;
+  persistSessionState?: (state: {
+    currentObjective?: string | null;
+    sessionSummary?: string | null;
+    objectiveStep?: number;
+    objectiveProgress?: number;
+    objectiveHistory?: string[];
+    currentView?: 'chat' | 'dashboard' | 'dashboard-debug';
+    activeTab?: 'preview' | 'code';
+  }) => Promise<void> | void;
+  onConversationUpdated?: () => Promise<void> | void;
 }
 
 export const useChatPromptSender = ({
@@ -52,6 +63,8 @@ export const useChatPromptSender = ({
   setAgentStatuses,
   pushSessionLog,
   getAuthorizationHeaders,
+  persistSessionState,
+  onConversationUpdated,
 }: UseChatPromptSenderArgs) => {
   const sendPrompt = useCallback(async (promptInput: string, attachments: AttachmentPreview[] = []) => {
     const trimmedMessage = promptInput.trim();
@@ -71,14 +84,14 @@ export const useChatPromptSender = ({
       .replace(/[\u0300-\u036f]/g, '');
 
     if (!currentObjective) {
-      const hasObjectiveIntent = ['objectif', 'analyser', 'je veux', 'lancer'].some((keyword) =>
-        normalizedPrompt.includes(keyword)
-      );
-
-      if (hasObjectiveIntent) {
-        const objectiveLabel = compactPrompt.length > 25 ? compactPrompt.slice(0, 25) + '...' : compactPrompt;
-        setCurrentObjective(objectiveLabel);
-      }
+      const generatedTitle = buildConversationTitle({
+        currentObjective: null,
+        firstMessagePreview: trimmedMessage || compactPrompt,
+      });
+      setCurrentObjective(generatedTitle);
+      void persistSessionState?.({
+        currentObjective: generatedTitle,
+      });
     }
 
     const requestStartedAt = Date.now();
@@ -301,6 +314,9 @@ export const useChatPromptSender = ({
     } finally {
       setIsLoading(false);
       setIsExecutingWorkspace(false);
+      if (onConversationUpdated) {
+        await onConversationUpdated();
+      }
     }
   }, [
     apiBaseUrl,
@@ -319,6 +335,7 @@ export const useChatPromptSender = ({
     setObjectiveProgress,
     setObjectiveStep,
     setSecurityScore,
+    onConversationUpdated,
   ]);
 
   return { sendPrompt };

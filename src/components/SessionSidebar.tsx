@@ -58,7 +58,7 @@ export function SessionSidebar({
             </div>
             <div className={`flex items-center gap-2 text-[10px] relative z-10 ${isDarkMode ? 'text-white/20' : 'text-purple-900/30'}`}>
               <Trophy className="w-3 h-3 text-purple-400/40" />
-              <span className="font-medium">{completedSteps} sur 5 etapes completees</span>
+              <span className="font-medium">{completedSteps} sur 5 étapes complétées</span>
             </div>
             {sessionSummary && (
               <div className={`mt-3 pt-3 border-t relative z-10 text-[11px] leading-relaxed ${isDarkMode ? 'border-white/10 text-white/60' : 'border-purple-100 text-purple-950/70'}`}>
@@ -71,13 +71,13 @@ export function SessionSidebar({
         )}
       </div>
 
-      <div className="px-10 py-8">
+      <div className="flex min-h-0 flex-1 flex-col px-10 py-8">
         <h3 className={`text-[9px] font-black tracking-[0.3em] uppercase ${isDarkMode ? 'text-white/20' : 'text-purple-900/40'} mb-8 flex items-center gap-3 transition-colors`}>
           <Activity className="w-4 h-4 text-purple-400/60" />
           ÉQUIPE MOBILISÉE
         </h3>
 
-        <div className="space-y-4">
+        <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
           {agents.map((agent) => {
             const isAgentActive = agentStatuses[agent.id] === 'working';
             return (

@@ -1,8 +1,8 @@
-﻿import { useState, useEffect, useRef, useCallback, type ChangeEvent } from 'react';
-import { 
-  Menu, Plus, Target, Trophy, Brain, Send, Mic, Paperclip, X, Share2, Download, Play, Code, Eye,
+import { useState, useEffect, useRef, useCallback, type ChangeEvent } from 'react';
+import {
+  Menu, Plus, Target, Trophy, Brain, Send, Mic, Paperclip, X, Share2, Download, Play, Code, Eye, MessageSquareText,
   Terminal, Activity, Globe, Search, Zap, LayoutDashboard,
-  ShieldCheck, Cpu, Sun, Moon, AlertTriangle
+  ShieldCheck, Cpu, Sun, Moon, AlertTriangle, Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SignedIn, useAuth, useClerk, useUser } from '@clerk/clerk-react';
@@ -15,16 +15,21 @@ import DashboardView from './components/DashboardView';
 import PricingModal from './components/PricingModal';
 import SettingsView from './components/SettingsView';
 import { useBackendSnapshot } from './hooks/useBackendSnapshot';
+import { useConversationSessions } from './hooks/useConversationSessions';
 import { useChatHistory } from './hooks/useChatHistory';
 import { useChatPromptSender } from './hooks/useChatPromptSender';
+import { useSessionStateSync } from './hooks/useSessionStateSync';
 import { useWorkspaceNotice } from './hooks/useWorkspaceNotice';
 import {
   type Agent,
   type AttachmentPreview,
+  type ConversationSession,
+  type Message,
   type SessionLog,
 } from './lib/appTypes';
 import {
   CHAT_ATTACHMENT_ACCEPT,
+  buildConversationTitle,
   createSessionId,
   SESSION_STORAGE_KEY,
   evaluatePromptSecurity,
@@ -34,7 +39,39 @@ import {
   formatSnapshotTime,
   readOrCreateSessionId,
   shrinkText,
-} from './lib/appUtils';
+  } from './lib/appUtils';
+
+const OBJECTIVE_STORAGE_KEY = 'mindmesh-objective-state';
+
+type StoredObjectiveState = {
+  currentObjective: string | null;
+  objectiveProgress: number;
+  objectiveStep: number;
+  objectiveHistory: string[];
+};
+
+const loadStoredObjectiveState = (): StoredObjectiveState => {
+  if (typeof window === 'undefined') {
+    return { currentObjective: null, objectiveProgress: 0, objectiveStep: 0, objectiveHistory: [] };
+  }
+
+  try {
+    const rawState = window.localStorage.getItem(OBJECTIVE_STORAGE_KEY);
+    if (!rawState) return { currentObjective: null, objectiveProgress: 0, objectiveStep: 0, objectiveHistory: [] };
+
+    const parsed = JSON.parse(rawState) as Partial<StoredObjectiveState>;
+    return {
+      currentObjective: typeof parsed.currentObjective === 'string' && parsed.currentObjective.trim() ? parsed.currentObjective.trim() : null,
+      objectiveProgress: Number.isFinite(Number(parsed.objectiveProgress)) ? Math.max(0, Math.min(100, Number(parsed.objectiveProgress))) : 0,
+      objectiveStep: Number.isFinite(Number(parsed.objectiveStep)) ? Math.max(0, Math.min(5, Number(parsed.objectiveStep))) : 0,
+      objectiveHistory: Array.isArray(parsed.objectiveHistory)
+        ? parsed.objectiveHistory.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 12)
+        : [],
+    };
+  } catch {
+    return { currentObjective: null, objectiveProgress: 0, objectiveStep: 0, objectiveHistory: [] };
+  }
+};
 
 export default function App() {
   const { signOut } = useClerk();
@@ -56,6 +93,7 @@ export default function App() {
   const [showMobileWorkspace, setShowMobileWorkspace] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [message, setMessage] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -68,9 +106,12 @@ export default function App() {
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [sessionLogs, setSessionLogs] = useState<SessionLog[]>([]);
   const [currentView, setCurrentView] = useState<'chat' | 'dashboard' | 'dashboard-debug'>('chat');
+  const storedObjectiveState = loadStoredObjectiveState();
   const [objectiveProgress, setObjectiveProgress] = useState(0);
   const [objectiveStep, setObjectiveStep] = useState(0);
   const [currentObjective, setCurrentObjective] = useState<string | null>(null);
+  const [objectiveHistory, setObjectiveHistory] = useState<string[]>(storedObjectiveState.objectiveHistory);
+  const [sessionSummary, setSessionSummary] = useState<string | null>(null);
   const [securityScore, setSecurityScore] = useState(99.8);
   const [isExecutingWorkspace, setIsExecutingWorkspace] = useState(false);
   const { workspaceNotice, showWorkspaceNotice } = useWorkspaceNotice();
@@ -108,6 +149,44 @@ export default function App() {
     navigate('/sign-in');
   }, [navigate, signOut]);
 
+  const clearObjective = useCallback(() => {
+    setCurrentObjective(null);
+    setObjectiveProgress(0);
+    setObjectiveStep(0);
+  }, []);
+
+  const archiveCurrentObjective = useCallback(() => {
+    if (!currentObjective) return;
+
+    setObjectiveHistory((prev) => {
+      const nextHistory = [currentObjective, ...prev.filter((item) => item !== currentObjective)].slice(0, 12);
+      return nextHistory;
+    });
+
+    setCurrentObjective(null);
+    setObjectiveProgress(0);
+    setObjectiveStep(0);
+  }, [currentObjective]);
+
+  const resetChatUiState = useCallback(() => {
+    setMessages([]);
+    setSessionLogs([]);
+    setLatencyMs(null);
+    setAttachmentPreviews([]);
+    resetAgentStatuses();
+    setMessage('');
+    setSecurityScore(99.8);
+    setIsExecutingWorkspace(false);
+  }, [setMessages]);
+
+  function handleNewChat() {
+    closeMobilePanels();
+    archiveCurrentObjective();
+    resetChatUiState();
+    setCurrentView('chat');
+    resetSession();
+  }
+
   const currentPath = pathname !== '/' ? pathname.replace(/\/+$/, '') : pathname;
   const isSignInRoute = currentPath === '/sign-in';
   const isSignUpRoute = currentPath === '/sign-up';
@@ -136,9 +215,34 @@ export default function App() {
     apiBaseUrl: (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4020').replace(/\/+$/, ''),
     sessionId,
     getAuthorizationHeaders,
+    setMessages,
   });
-  const { messages, setMessages, loadChatHistory } = chatHistory;
+  const { loadChatHistory } = chatHistory;
   const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4020').replace(/\/+$/, '');
+  const { conversationSessions, isLoadingConversationSessions, refreshConversationSessions } = useConversationSessions({
+    apiBaseUrl: API_BASE_URL,
+    getAuthorizationHeaders,
+    enabled: isLoaded,
+  });
+  const { loadSessionState, persistSessionState, isSessionStateHydrated } = useSessionStateSync({
+    apiBaseUrl: API_BASE_URL,
+    sessionId,
+    currentView,
+    activeTab,
+    currentObjective,
+    sessionSummary,
+    objectiveStep,
+    objectiveProgress,
+    objectiveHistory,
+    getAuthorizationHeaders,
+    setCurrentObjective,
+    setSessionSummary,
+    setObjectiveHistory,
+    setCurrentView,
+    setActiveTab,
+    setObjectiveStep,
+    setObjectiveProgress,
+  });
   const { backendSnapshot, metricsSnapshot, isRefreshingSnapshot, refreshBackendSnapshot } = useBackendSnapshot({
     apiBaseUrl: API_BASE_URL,
     getMetricsHeaders: getAuthorizationHeaders,
@@ -148,6 +252,28 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      if (!currentObjective && objectiveHistory.length === 0) {
+        window.localStorage.removeItem(OBJECTIVE_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(
+          OBJECTIVE_STORAGE_KEY,
+          JSON.stringify({
+            currentObjective,
+            objectiveProgress,
+            objectiveStep,
+            objectiveHistory,
+          }),
+        );
+      }
+    } catch {
+      // noop
+    }
+  }, [currentObjective, objectiveHistory, objectiveProgress, objectiveStep]);
 
   useEffect(() => {
     if (!logsContainerRef.current) return;
@@ -167,6 +293,9 @@ export default function App() {
   const assistantMessagesCount = messages.filter((m) => m.role === 'assistant').length;
   const failedMessagesCount = messages.filter((m) => m.role === 'system' && m.tone === 'error').length;
   const completedSteps = objectiveStep;
+  const objectiveDisplayText = currentObjective && objectiveProgress >= 100
+    ? `${currentObjective} — objectif atteint, poursuivez la conversation ou supprimez-le.`
+    : currentObjective;
   const resetAgentStatuses = () => {
     setAgentStatuses({
       africonnect: 'idle',
@@ -263,11 +392,85 @@ export default function App() {
     setAgentStatuses,
     pushSessionLog,
     getAuthorizationHeaders,
+    persistSessionState,
+    onConversationUpdated: refreshConversationSessions,
   });
+
+  const openConversationSession = useCallback(
+    async (conversation: ConversationSession) => {
+      closeMobilePanels();
+      resetChatUiState();
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(SESSION_STORAGE_KEY, conversation.sessionId);
+        } catch {
+          // noop
+        }
+      }
+      setSessionId(conversation.sessionId);
+      setCurrentObjective(conversation.currentObjective);
+      setSessionSummary(conversation.sessionSummary);
+      setObjectiveStep(conversation.objectiveStep);
+      setObjectiveProgress(conversation.objectiveProgress);
+      setObjectiveHistory(conversation.objectiveHistory);
+      setCurrentView('chat');
+      setActiveTab('preview');
+      await refreshConversationSessions();
+    },
+    [refreshConversationSessions, resetChatUiState],
+  );
+
+  const handleDeleteConversation = useCallback(
+    async (conversation: ConversationSession) => {
+      const confirmed = typeof window === 'undefined' ? true : window.confirm(`Supprimer la conversation « ${buildConversationTitle({ currentObjective: conversation.currentObjective, firstMessagePreview: conversation.firstMessagePreview })} » ?`);
+      if (!confirmed) return;
+
+      try {
+        const authHeaders = await getAuthorizationHeaders();
+        const response = await fetch(`${API_BASE_URL}/api/sessions/${encodeURIComponent(conversation.sessionId)}`, {
+          method: 'DELETE',
+          headers: {
+            ...authHeaders,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`DELETE_FAILED_${response.status}`);
+        }
+
+        if (conversation.sessionId === sessionId) {
+          resetSession();
+          resetChatUiState();
+          setCurrentView('chat');
+          setCurrentObjective(null);
+          setSessionSummary(null);
+          setObjectiveStep(0);
+          setObjectiveProgress(0);
+          setObjectiveHistory([]);
+          setActiveTab('preview');
+        }
+
+        await refreshConversationSessions();
+      } catch (error) {
+        console.error('Suppression conversation impossible:', error);
+        showWorkspaceNotice('warn', 'Suppression impossible pour le moment.');
+      }
+    },
+    [API_BASE_URL, getAuthorizationHeaders, refreshConversationSessions, resetChatUiState, sessionId, showWorkspaceNotice],
+  );
 
   useEffect(() => {
     void loadChatHistory();
   }, [loadChatHistory]);
+
+  useEffect(() => {
+    void loadSessionState();
+  }, [loadSessionState]);
+
+  useEffect(() => {
+    if (!isSessionStateHydrated) return;
+    void persistSessionState();
+  }, [activeTab, currentObjective, currentView, isSessionStateHydrated, objectiveHistory, objectiveProgress, objectiveStep, persistSessionState, sessionSummary]);
 
   const workspaceRuntimeState =
     backendSnapshot.ready === 'ready'
@@ -327,8 +530,49 @@ export default function App() {
           : 'bg-purple-50 border-purple-200 text-purple-700';
 
   const markdownBubbleClass = isDarkMode
-    ? 'prose prose-invert max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-fuchsia-300 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-400 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-fuchsia-200 prose-code:bg-white/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-pre:bg-black/30 prose-pre:border prose-pre:border-white/10'
-    : 'prose prose-slate max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-purple-700 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-500 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-purple-700 prose-code:bg-purple-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-pre:bg-slate-50 prose-pre:border prose-pre:border-purple-100';
+    ? 'prose prose-invert max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-fuchsia-300 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-400 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-fuchsia-200 prose-code:bg-white/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:break-words prose-pre:bg-black/30 prose-pre:border prose-pre:border-white/10 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-img:max-w-full prose-img:h-auto'
+    : 'prose prose-slate max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-purple-700 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-500 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-purple-700 prose-code:bg-purple-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:break-words prose-pre:bg-slate-50 prose-pre:border prose-pre:border-purple-100 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-img:max-w-full prose-img:h-auto';
+
+  const markdownTableComponents = {
+    table: ({ node, ...props }: any) => (
+      <div className="my-4 overflow-x-auto">
+        <table
+          {...props}
+          className={`min-w-full border-collapse text-sm ${isDarkMode ? 'border border-white/10' : 'border border-slate-200'}`}
+        />
+      </div>
+    ),
+    thead: ({ node, ...props }: any) => (
+      <thead
+        {...props}
+        className={`${isDarkMode ? 'bg-white/5 text-white' : 'bg-slate-50 text-slate-900'}`}
+      />
+    ),
+    tbody: ({ node, ...props }: any) => (
+      <tbody
+        {...props}
+        className={`${isDarkMode ? 'divide-y divide-white/10' : 'divide-y divide-slate-200'}`}
+      />
+    ),
+    tr: ({ node, ...props }: any) => (
+      <tr
+        {...props}
+        className={`${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}
+      />
+    ),
+    th: ({ node, ...props }: any) => (
+      <th
+        {...props}
+        className={`border px-3 py-2 text-left font-semibold ${isDarkMode ? 'border-white/10 bg-white/5 text-white' : 'border-slate-200 bg-slate-50 text-slate-700'}`}
+      />
+    ),
+    td: ({ node, ...props }: any) => (
+      <td
+        {...props}
+        className={`border px-3 py-2 align-top ${isDarkMode ? 'border-white/10 text-white/80' : 'border-slate-200 text-slate-700'}`}
+      />
+    ),
+  };
 
   const latestAssistantMarkdown = (latestAssistantMessage || 'Aucune réponse disponible pour le moment.').replace(/\\n/g, '\n');
 
@@ -347,17 +591,17 @@ export default function App() {
 
   if (!isLoaded) {
     return (
-      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[var(--background)] text-[var(--text)]">
-        <div className="absolute inset-0 bg-dot-grid opacity-60" />
-        <div className="absolute -right-40 top-[-140px] h-[520px] w-[520px] rounded-full bg-purple-600/20 blur-[140px]" />
-        <div className="absolute -left-44 bottom-[-180px] h-[560px] w-[560px] rounded-full bg-pink-500/10 blur-[160px]" />
-        <div className="relative flex flex-col items-center gap-4 rounded-[32px] border border-white/10 bg-white/5 px-8 py-10 shadow-[0_30px_120px_rgba(15,23,42,0.24)] backdrop-blur-2xl">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-purple-200">
+      <div className={`relative flex min-h-dvh items-center justify-center overflow-hidden ${isDarkMode ? 'bg-[var(--background)] text-[var(--text)]' : 'bg-slate-50 text-slate-900'}`}>
+        <div className={`absolute inset-0 bg-dot-grid ${isDarkMode ? 'opacity-60' : 'opacity-40'}`} />
+        <div className={`absolute -right-40 top-[-140px] h-[520px] w-[520px] rounded-full blur-[140px] ${isDarkMode ? 'bg-purple-600/20' : 'bg-purple-300/30'}`} />
+        <div className={`absolute -left-44 bottom-[-180px] h-[560px] w-[560px] rounded-full blur-[160px] ${isDarkMode ? 'bg-pink-500/10' : 'bg-pink-300/25'}`} />
+        <div className={`relative flex flex-col items-center gap-4 rounded-[32px] border px-8 py-10 shadow-[0_30px_120px_rgba(15,23,42,0.24)] backdrop-blur-2xl ${isDarkMode ? 'border-white/10 bg-white/5 text-white' : 'border-slate-200 bg-white/90 text-slate-900'}`}>
+          <div className={`flex h-14 w-14 items-center justify-center rounded-2xl border ${isDarkMode ? 'border-white/10 bg-white/10 text-purple-200' : 'border-purple-100 bg-purple-50 text-purple-700'}`}>
             <Brain className="h-7 w-7 animate-pulse" />
           </div>
           <div className="text-center">
-            <div className="text-[10px] font-black uppercase tracking-[0.28em] text-purple-200/80">MindMesh</div>
-            <div className="mt-2 text-sm text-white/60">Chargement de la session...</div>
+            <div className={`text-[10px] font-black uppercase tracking-[0.28em] ${isDarkMode ? 'text-purple-200/80' : 'text-purple-700/80'}`}>MindMesh</div>
+            <div className={`mt-2 text-sm ${isDarkMode ? 'text-white/60' : 'text-slate-600'}`}>Chargement de la session...</div>
           </div>
         </div>
       </div>
@@ -598,11 +842,7 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => {
-              closeMobilePanels();
-              setCurrentView('chat');
-              resetSession();
-            }}
+            onClick={handleNewChat}
             className="flex items-center justify-center gap-2 w-full py-3.5 px-4 gradient-vibrant text-white rounded-2xl font-bold text-sm hover:opacity-90 transition-all mb-8 group active:scale-95 shadow-lg shadow-purple-500/20"
           >
             <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
@@ -652,7 +892,67 @@ export default function App() {
             )}
           </nav>
 
-                    <div className="mb-6">
+          <div className="mb-6 flex min-h-0 flex-1 flex-col gap-3">
+            <div className={`flex items-center gap-2 ${isDarkMode ? 'text-white/20' : 'text-purple-950/60'} uppercase text-[9px] font-black tracking-widest px-2`}>
+              <MessageSquareText className="w-3 h-3" />
+              <span>Conversations passées</span>
+            </div>
+
+            {conversationSessions.length > 0 ? (
+              <div className="custom-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                {conversationSessions.slice(0, 6).map((conversation) => {
+                  const isActiveConversation = conversation.sessionId === sessionId;
+                  const title = buildConversationTitle({
+                    currentObjective: conversation.currentObjective,
+                    firstMessagePreview: conversation.firstMessagePreview,
+                  });
+
+                  return (
+                    <div
+                      key={conversation.sessionId}
+                      className={`group relative rounded-2xl border transition-colors ${
+                        isActiveConversation
+                          ? isDarkMode
+                            ? 'border-purple-400/40 bg-purple-500/10 text-white'
+                            : 'border-purple-300 bg-purple-50 text-purple-950'
+                          : isDarkMode
+                            ? 'border-white/10 bg-white/5 text-white/80 hover:bg-white/10'
+                            : 'border-purple-100 bg-white text-slate-700 hover:bg-purple-50'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void openConversationSession(conversation)}
+                        className="w-full rounded-2xl px-3 py-3 pr-12 text-left"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-semibold">{title}</div>
+                          </div>
+                          <div className={`shrink-0 rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-[0.18em] ${isDarkMode ? 'border-white/10 bg-white/5 text-white/35' : 'border-slate-200 bg-white text-slate-500'}`}>
+                            {conversation.messageCount}
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteConversation(conversation)}
+                        className={`absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 ${isDarkMode ? 'border-white/10 bg-white/5 text-white/35 hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-200' : 'border-slate-200 bg-white text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600'}`}
+                        aria-label={`Supprimer ${title}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="px-2 text-xs text-gray-400 italic">Aucune conversation sauvegardée</p>
+            )}
+          </div>
+
+          <div className="mb-6 shrink-0">
             <div className={`flex items-center gap-2 ${isDarkMode ? 'text-white/20' : 'text-purple-950/60'} uppercase text-[9px] font-black tracking-widest px-2 mb-4`}>
               <Target className="w-3 h-3" />
               <span>Mes Objectifs</span>
@@ -663,9 +963,19 @@ export default function App() {
                 whileHover={{ y: -2 }}
                 className={`rounded-[24px] p-5 mb-4 border transition-all cursor-pointer relative overflow-hidden group shadow-2xl ${isDarkMode ? 'bg-[#150925] border-white/5' : 'bg-white/80 border-purple-200'}`}
               >
-                <div className="flex justify-between items-start mb-3 relative z-10">
-                  <span className={`font-semibold text-xs ${isDarkMode ? 'text-gray-300' : 'text-purple-900'}`}>{currentObjective}</span>
-                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-600 dark:text-purple-300 rounded-full text-[9px] font-black tracking-tighter">{objectiveProgress}%</span>
+                <div className="flex justify-between items-start gap-3 mb-3 relative z-10">
+                  <span className={`font-semibold text-xs leading-5 ${isDarkMode ? 'text-gray-300' : 'text-purple-900'}`}>{objectiveDisplayText}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-600 dark:text-purple-300 rounded-full text-[9px] font-black tracking-tighter">{objectiveProgress}%</span>
+                    <button
+                      type="button"
+                      onClick={clearObjective}
+                      className={`flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${isDarkMode ? 'border-white/10 bg-white/5 text-white/55 hover:bg-white/10' : 'border-purple-100 bg-white text-slate-500 hover:bg-purple-50'}`}
+                      aria-label="Supprimer l'objectif"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <div className={`w-full h-1.5 rounded-full overflow-hidden mb-3 relative z-10 ${isDarkMode ? 'bg-white/5' : 'bg-purple-100'}`}>
                   <motion.div
@@ -679,6 +989,11 @@ export default function App() {
                   <Trophy className="w-3 h-3 text-purple-400/40" />
                   <span className="font-medium">{completedSteps} sur 5 etapes completees</span>
                 </div>
+                {objectiveProgress >= 100 && (
+                  <p className={`mt-3 text-[11px] leading-relaxed relative z-10 ${isDarkMode ? 'text-white/60' : 'text-purple-950/70'}`}>
+                    Objectif atteint — poursuivez la conversation ou supprimez-le si vous voulez repartir sur une nouvelle base.
+                  </p>
+                )}
               </motion.div>
             ) : (
               <p className="text-xs text-gray-400 italic mt-2">Aucun objectif en cours</p>
@@ -740,8 +1055,18 @@ export default function App() {
               messages={messages}
               isDarkMode={isDarkMode}
               isAdmin={isAdmin}
+              objective={objectiveDisplayText}
+              objectiveProgress={objectiveProgress}
+              completedSteps={completedSteps}
+              objectiveHistory={objectiveHistory}
+              conversationSessions={conversationSessions}
+              activeSessionId={sessionId}
+              isLoadingConversationSessions={isLoadingConversationSessions}
+              onClearObjective={clearObjective}
               onQuickAction={handleQuickAction}
               onBackToChat={() => setCurrentView('chat')}
+              onOpenConversation={openConversationSession}
+              onDeleteConversation={handleDeleteConversation}
               onOpenDebug={openDebugDashboard}
             />
           ) : currentView === 'dashboard-debug' && isAdmin ? (
@@ -801,7 +1126,7 @@ export default function App() {
                 key="chat"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="w-full h-full flex flex-col gap-6 overflow-y-auto custom-scrollbar p-6 relative z-10 mx-auto"
+                className="w-full h-full flex flex-col gap-6 overflow-y-auto overflow-x-hidden custom-scrollbar p-6 relative z-10 mx-auto"
               >
                 {messages.map((m, index) => {
                   const isUserMessage = m.role === 'user';
@@ -809,7 +1134,7 @@ export default function App() {
                   const isErrorMessage = m.role === 'system' && m.tone === 'error';
 
                   return (
-                  <div key={index} className={`flex gap-4 ${isUserMessage ? 'justify-end' : ''}`}>
+                  <div key={index} className={`flex min-w-0 gap-4 ${isUserMessage ? 'justify-end' : ''}`}>
                     {isAssistantMessage && (
                       <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-500 border border-purple-500/20 shrink-0">
                         <Brain size={18} />
@@ -822,7 +1147,7 @@ export default function App() {
                       </div>
                     )}
                     
-                    <div className={`text-sm leading-relaxed markdown-body ${markdownBubbleClass} ${
+                    <div className={`min-w-0 max-w-full text-sm leading-relaxed markdown-body overflow-x-hidden ${markdownBubbleClass} ${
                       isUserMessage
                         ? 'w-fit max-w-[80%] px-4 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-br-none shadow-lg shadow-purple-500/20 whitespace-pre-wrap break-words'
                         : isErrorMessage
@@ -832,7 +1157,7 @@ export default function App() {
                       {isUserMessage ? (
                         <div className="whitespace-pre-wrap break-words">{m.content}</div>
                       ) : (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{(m.content || '').replace(/\\n/g, '\n')}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownTableComponents}>{(m.content || '').replace(/\\n/g, '\n')}</ReactMarkdown>
                       )}
                     </div>
                     
@@ -1029,7 +1354,7 @@ export default function App() {
                 <div className={`rounded-[28px] border backdrop-blur-xl p-6 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-200 bg-white/70'}`}>
                   {activeTab === 'preview' ? (
                     <div className={`markdown-body ${markdownBubbleClass} text-sm leading-relaxed ${isDarkMode ? 'text-gray-200' : 'text-slate-700'}`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownTableComponents}>
                         {latestAssistantMarkdown}
                       </ReactMarkdown>
                     </div>
@@ -1160,6 +1485,3 @@ export default function App() {
     </div>
   );
 }
-
-
-

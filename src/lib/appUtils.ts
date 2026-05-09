@@ -52,6 +52,23 @@ export const readOrCreateSessionId = (): string => {
   return generated;
 };
 
+export const buildConversationTitle = ({
+  currentObjective,
+  firstMessagePreview,
+}: {
+  currentObjective: string | null;
+  firstMessagePreview?: string | null;
+}): string => {
+  const objective = currentObjective?.trim();
+  if (objective) return objective;
+
+  const preview = firstMessagePreview?.replace(/\s+/g, ' ').trim() || '';
+  if (!preview) return 'Conversation sans titre';
+
+  const words = preview.split(' ').filter(Boolean).slice(0, 4);
+  return words.length > 0 ? words.join(' ') : 'Conversation sans titre';
+};
+
 export const evaluatePromptSecurity = (prompt: string): number => {
   if (!prompt.trim()) return 99.8;
 

@@ -20,6 +20,23 @@ export interface SessionLog {
   tone: 'info' | 'success' | 'warn';
 }
 
+export interface ConversationSession {
+  sessionId: string;
+  userSub: string | null;
+  currentObjective: string | null;
+  sessionSummary: string | null;
+  firstMessagePreview: string | null;
+  currentView: string | null;
+  activeTab: string | null;
+  objectiveStep: number;
+  objectiveProgress: number;
+  objectiveHistory: string[];
+  messageCount: number;
+  lastMessagePreview: string | null;
+  updatedAt: string | null;
+  lastActivityAt: string | null;
+}
+
 export interface BackendSnapshot {
   health: 'ok' | 'down' | 'unknown';
   ready: 'ready' | 'degraded' | 'down' | 'unknown';

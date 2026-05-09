@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import type { Message } from '../lib/appTypes';
 
 interface UseChatHistoryArgs {
   apiBaseUrl: string;
   sessionId: string;
   getAuthorizationHeaders: () => Promise<Record<string, string>>;
+  setMessages: Dispatch<SetStateAction<Message[]>>;
 }
 
-export const useChatHistory = ({ apiBaseUrl, sessionId, getAuthorizationHeaders }: UseChatHistoryArgs) => {
-  const [messages, setMessages] = useState<Message[]>([]);
+export const useChatHistory = ({ apiBaseUrl, sessionId, getAuthorizationHeaders, setMessages }: UseChatHistoryArgs) => {
   const abortRef = useRef<AbortController | null>(null);
   const versionRef = useRef(0);
 
@@ -62,5 +62,5 @@ export const useChatHistory = ({ apiBaseUrl, sessionId, getAuthorizationHeaders 
     };
   }, []);
 
-  return { messages, setMessages, loadChatHistory };
+  return { loadChatHistory };
 };

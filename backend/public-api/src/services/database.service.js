@@ -66,6 +66,27 @@ const normalizeSessionStateText = (value, max = 2000) => {
   return text.length > max ? text.slice(0, max) : text;
 };
 
+const mapConversationSessionRow = (row) => ({
+  sessionId: row.session_id,
+  userSub: row.user_sub || null,
+  currentObjective: row.current_objective || null,
+  sessionSummary: row.session_summary || null,
+  firstMessagePreview: row.first_message_preview || null,
+  currentView: normalizeWorkspaceValue(row.current_view),
+  activeTab: normalizeWorkspaceValue(row.active_tab),
+  objectiveStep: toBoundedPercent(row.objective_step, 0),
+  objectiveProgress: toBoundedPercent(row.objective_progress, 0),
+  objectiveHistory: Array.isArray(row.objective_history)
+    ? row.objective_history
+        .map((item) => normalizeOptionalText(item, 200))
+        .filter(Boolean)
+    : [],
+  messageCount: toNonNegativeInt(row.message_count),
+  lastMessagePreview: normalizeSessionStateText(row.last_message_preview, 300),
+  updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null,
+});
+
 const buildSessionSummary = ({ currentObjective, userMessage, assistantMessage, messageCount }) => {
   const objective = normalizeOptionalText(currentObjective, 120);
   const userSnippet = clampPreservingFormatting(userMessage, 120);
@@ -177,7 +198,7 @@ export const initializeDatabase = async () => {
       try {
         pool = new Pool({
           connectionString: env.databaseUrl,
-          ssl: env.databaseSsl ? { rejectUnauthorized: true } : false,
+          ssl: env.databaseSsl ? { rejectUnauthorized: false } : false,
         });
 
         await pool.query('SELECT 1');
@@ -423,6 +444,7 @@ export const upsertSessionState = async ({
   activeTab,
   objectiveStep = 0,
   objectiveProgress = 0,
+  objectiveHistory = [],
 }) => {
   if (!isReady()) return;
 
@@ -435,8 +457,8 @@ export const upsertSessionState = async ({
   await pool
     .query(
       `INSERT INTO session_states
-       (session_id, user_sub, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+       (session_id, user_sub, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress, objective_history, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
        ON CONFLICT (session_id)
        DO UPDATE SET
          user_sub = EXCLUDED.user_sub,
@@ -446,6 +468,7 @@ export const upsertSessionState = async ({
          active_tab = COALESCE(EXCLUDED.active_tab, session_states.active_tab),
          objective_step = COALESCE(EXCLUDED.objective_step, session_states.objective_step),
          objective_progress = COALESCE(EXCLUDED.objective_progress, session_states.objective_progress),
+         objective_history = COALESCE(EXCLUDED.objective_history, session_states.objective_history),
          updated_at = NOW()`,
       [
         resolvedSessionId,
@@ -456,6 +479,14 @@ export const upsertSessionState = async ({
         normalizeWorkspaceValue(activeTab),
         Number.isFinite(Number(objectiveStep)) ? toBoundedPercent(objectiveStep, 0) : null,
         Number.isFinite(Number(objectiveProgress)) ? toBoundedPercent(objectiveProgress, 0) : null,
+        JSON.stringify(
+          Array.isArray(objectiveHistory)
+            ? objectiveHistory
+                .map((item) => normalizeOptionalText(item, 200))
+                .filter(Boolean)
+                .slice(0, 12)
+            : [],
+        ),
       ],
     )
     .catch((error) => {
@@ -473,6 +504,7 @@ export const getSessionState = async ({ sessionId, userSub }) => {
       activeTab: null,
       objectiveStep: 0,
       objectiveProgress: 0,
+      objectiveHistory: [],
     };
   }
 
@@ -486,6 +518,7 @@ export const getSessionState = async ({ sessionId, userSub }) => {
       activeTab: null,
       objectiveStep: 0,
       objectiveProgress: 0,
+      objectiveHistory: [],
     };
   }
 
@@ -499,19 +532,20 @@ export const getSessionState = async ({ sessionId, userSub }) => {
       activeTab: null,
       objectiveStep: 0,
       objectiveProgress: 0,
+      objectiveHistory: [],
     };
   }
 
   const hasUserSub = typeof userSub === 'string' && userSub.trim().length > 0;
   const queryText = hasUserSub
-    ? `SELECT session_id, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress
-       FROM session_states
-       WHERE session_id = $1 AND user_sub = $2
-       LIMIT 1`
-    : `SELECT session_id, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress
-       FROM session_states
-       WHERE session_id = $1
-       LIMIT 1`;
+    ? `SELECT session_id, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress, objective_history
+        FROM session_states
+        WHERE session_id = $1 AND user_sub = $2
+        LIMIT 1`
+    : `SELECT session_id, current_objective, session_summary, current_view, active_tab, objective_step, objective_progress, objective_history
+        FROM session_states
+        WHERE session_id = $1
+        LIMIT 1`;
   const queryParams = hasUserSub ? [resolvedSessionId, userSub.trim()] : [resolvedSessionId];
 
   const result = await pool.query(queryText, queryParams);
@@ -526,6 +560,7 @@ export const getSessionState = async ({ sessionId, userSub }) => {
       activeTab: null,
       objectiveStep: 0,
       objectiveProgress: 0,
+      objectiveHistory: [],
     };
   }
 
@@ -537,7 +572,108 @@ export const getSessionState = async ({ sessionId, userSub }) => {
     activeTab: normalizeWorkspaceValue(row.active_tab),
     objectiveStep: toBoundedPercent(row.objective_step, 0),
     objectiveProgress: toBoundedPercent(row.objective_progress, 0),
+    objectiveHistory: Array.isArray(row.objective_history)
+      ? row.objective_history
+          .map((item) => normalizeOptionalText(item, 200))
+          .filter(Boolean)
+      : [],
   };
+};
+
+export const listConversationSessions = async ({ userSub, limit = 12 }) => {
+  if (!isReady()) {
+    return [];
+  }
+
+  const pool = state.pool;
+  if (!pool) {
+    return [];
+  }
+
+  const resolvedUserSub = typeof userSub === 'string' ? userSub.trim() : '';
+  if (!resolvedUserSub) {
+    return [];
+  }
+
+  const safeLimit = toHistoryLimit(limit, 12);
+
+  const queryText = `
+    WITH message_summary AS (
+      SELECT
+        session_id,
+        user_sub,
+        COUNT(*)::int AS message_count,
+        MAX(created_at) AS last_message_at,
+        COALESCE(
+          (ARRAY_AGG(NULLIF(user_message, '') ORDER BY created_at ASC, id ASC))[1],
+          ''
+        ) AS first_message_preview,
+        COALESCE(
+          (ARRAY_AGG(NULLIF(assistant_message, '') ORDER BY created_at DESC, id DESC))[1],
+          (ARRAY_AGG(NULLIF(user_message, '') ORDER BY created_at DESC, id DESC))[1],
+          ''
+        ) AS last_message_preview
+      FROM chat_requests
+      WHERE user_sub = $1
+      GROUP BY session_id, user_sub
+    )
+    SELECT
+      s.session_id,
+      s.user_sub,
+      s.current_objective,
+      s.session_summary,
+      s.current_view,
+      s.active_tab,
+      s.objective_step,
+      s.objective_progress,
+      s.objective_history,
+      s.updated_at,
+      COALESCE(m.message_count, 0) AS message_count,
+      m.first_message_preview,
+      m.last_message_preview,
+      COALESCE(m.last_message_at, s.updated_at) AS last_activity_at
+    FROM session_states s
+    LEFT JOIN message_summary m
+      ON m.session_id = s.session_id AND m.user_sub = s.user_sub
+    WHERE s.user_sub = $1
+    ORDER BY COALESCE(m.last_message_at, s.updated_at) DESC, s.updated_at DESC
+    LIMIT $2
+  `;
+
+  const result = await pool.query(queryText, [resolvedUserSub, safeLimit]);
+  return result.rows.map(mapConversationSessionRow);
+};
+
+export const deleteConversationSession = async ({ sessionId, userSub }) => {
+  if (!isReady()) {
+    return { deleted: false };
+  }
+
+  const pool = state.pool;
+  if (!pool) {
+    return { deleted: false };
+  }
+
+  const resolvedSessionId = toSessionKey(sessionId);
+  const resolvedUserSub = typeof userSub === 'string' ? userSub.trim() : '';
+  if (!resolvedSessionId || !resolvedUserSub) {
+    return { deleted: false };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM chat_requests WHERE session_id = $1 AND user_sub = $2', [resolvedSessionId, resolvedUserSub]);
+    const result = await client.query('DELETE FROM session_states WHERE session_id = $1 AND user_sub = $2', [resolvedSessionId, resolvedUserSub]);
+    await client.query('COMMIT');
+    return { deleted: result.rowCount > 0 };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.warn({ err: error, session_id: resolvedSessionId, user_sub: resolvedUserSub }, 'database_delete_conversation_failed');
+    return { deleted: false };
+  } finally {
+    client.release();
+  }
 };
 
 export const buildSessionSummaryText = buildSessionSummary;

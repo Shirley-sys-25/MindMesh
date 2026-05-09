@@ -1,6 +1,7 @@
-import { ArrowRight, Brain, FileText, MessageSquareText, Search, Sparkles, WandSparkles, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Brain, FileText, MessageSquareText, Search, Sparkles, Trash2, WandSparkles, type LucideIcon } from 'lucide-react';
 import { motion } from 'motion/react';
-import type { Message } from '../lib/appTypes';
+import type { ConversationSession, Message } from '../lib/appTypes';
+import { buildConversationTitle } from '../lib/appUtils';
 
 interface QuickAction {
   title: string;
@@ -13,8 +14,18 @@ interface DashboardViewProps {
   messages: Message[];
   isDarkMode: boolean;
   isAdmin: boolean;
+  objective: string | null;
+  objectiveProgress: number;
+  completedSteps: number;
+  objectiveHistory: string[];
+  conversationSessions: ConversationSession[];
+  activeSessionId: string;
+  isLoadingConversationSessions: boolean;
+  onClearObjective: () => void;
   onQuickAction: (prompt: string) => void;
   onBackToChat: () => void;
+  onOpenConversation: (session: ConversationSession) => void;
+  onDeleteConversation: (session: ConversationSession) => void;
   onOpenDebug?: () => void;
 }
 
@@ -49,8 +60,18 @@ export default function DashboardView({
   messages,
   isDarkMode,
   isAdmin,
+  objective,
+  objectiveProgress,
+  completedSteps,
+  objectiveHistory,
+  conversationSessions,
+  activeSessionId,
+  isLoadingConversationSessions,
+  onClearObjective,
   onQuickAction,
   onBackToChat,
+  onOpenConversation,
+  onDeleteConversation,
   onOpenDebug,
 }: DashboardViewProps) {
   const recentMessages = messages
@@ -101,6 +122,84 @@ export default function DashboardView({
               )}
             </div>
           </div>
+
+          <section className={`mb-10 overflow-hidden rounded-[32px] border p-5 md:p-6 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-100 bg-white'}`}>
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="max-w-3xl">
+                <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.24em] ${isDarkMode ? 'border-white/10 bg-white/5 text-purple-200' : 'border-purple-100 bg-purple-50 text-purple-700'}`}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Mes objectifs
+                </div>
+                <h2 className={`mt-4 text-2xl font-semibold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  {objective || 'Aucun objectif actif'}
+                </h2>
+                <p className={`mt-2 text-sm leading-6 ${isDarkMode ? 'text-white/60' : 'text-slate-600'}`}>
+                  {objective
+                    ? objectiveProgress >= 100
+                      ? 'Objectif atteint — poursuivez la conversation ou supprimez-le si vous souhaitez repartir sur une nouvelle base.'
+                      : 'Votre objectif reste visible entre vos conversations pour garder le fil.'
+                    : 'Vos objectifs apparaissent ici dès qu’une demande claire est lancée.'}
+                </p>
+              </div>
+
+              {objective && (
+                <button
+                  type="button"
+                  onClick={onClearObjective}
+                  className={`inline-flex items-center gap-2 self-start rounded-full border px-4 py-2.5 text-xs font-semibold transition-colors ${isDarkMode ? 'border-white/10 bg-white/5 text-white/75 hover:bg-white/10' : 'border-purple-100 bg-white text-slate-600 hover:bg-purple-50'}`}
+                >
+                  Supprimer l'objectif
+                </button>
+              )}
+            </div>
+
+            {objective && (
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <div className={`rounded-3xl border p-4 ${isDarkMode ? 'border-white/10 bg-black/15' : 'border-purple-100 bg-purple-50/50'}`}>
+                  <p className={`text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                    Progression
+                  </p>
+                  <p className={`mt-2 text-2xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                    {objectiveProgress}%
+                  </p>
+                </div>
+                <div className={`rounded-3xl border p-4 ${isDarkMode ? 'border-white/10 bg-black/15' : 'border-purple-100 bg-purple-50/50'}`}>
+                  <p className={`text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                    Étapes
+                  </p>
+                  <p className={`mt-2 text-2xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                    {completedSteps}/5
+                  </p>
+                </div>
+                <div className={`rounded-3xl border p-4 ${isDarkMode ? 'border-white/10 bg-black/15' : 'border-purple-100 bg-purple-50/50'}`}>
+                  <p className={`text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                    Statut
+                  </p>
+                  <p className={`mt-2 text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                    {objectiveProgress >= 100 ? 'Terminé et conservé' : 'En cours'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {objectiveHistory.length > 0 && (
+              <div className="mt-5">
+                <p className={`text-[10px] font-black uppercase tracking-[0.24em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                  Objectifs récents
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {objectiveHistory.slice(0, 5).map((item) => (
+                    <span
+                      key={item}
+                      className={`rounded-full border px-3 py-2 text-xs font-medium ${isDarkMode ? 'border-white/10 bg-white/5 text-white/70' : 'border-purple-100 bg-purple-50 text-slate-700'}`}
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
 
           <section className="mb-10">
             <div className="mb-4 flex items-center justify-between gap-4">
@@ -153,9 +252,9 @@ export default function DashboardView({
                 <h2 className={`text-lg font-semibold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                   Conversations récentes
                 </h2>
-                <p className={`mt-1 text-sm ${isDarkMode ? 'text-white/45' : 'text-slate-500'}`}>
-                  Vos derniers échanges apparaissent ici lorsque l'historique est disponible.
-                </p>
+                  <p className={`mt-1 text-sm ${isDarkMode ? 'text-white/45' : 'text-slate-500'}`}>
+                    Vos derniers échanges apparaissent ici lorsque l'historique est disponible.
+                  </p>
               </div>
             </div>
 
@@ -211,6 +310,94 @@ export default function DashboardView({
                     </p>
                   </div>
                 </div>
+              </div>
+            )}
+          </section>
+
+          <section className="mt-10">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div>
+                <h2 className={`text-lg font-semibold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  Sessions sauvegardées
+                </h2>
+                <p className={`mt-1 text-sm ${isDarkMode ? 'text-white/45' : 'text-slate-500'}`}>
+                  Roulez entre vos conversations et reprenez un contexte précédent.
+                </p>
+              </div>
+              {isLoadingConversationSessions && (
+                <span className={`text-[10px] font-black uppercase tracking-[0.22em] ${isDarkMode ? 'text-white/35' : 'text-purple-900/50'}`}>
+                  Chargement...
+                </span>
+              )}
+            </div>
+
+            {conversationSessions.length > 0 ? (
+              <div className="grid gap-3">
+                {conversationSessions.map((session) => {
+                  const isActive = session.sessionId === activeSessionId;
+                  const title = buildConversationTitle({
+                    currentObjective: session.currentObjective,
+                    firstMessagePreview: session.firstMessagePreview,
+                  });
+                  return (
+                    <motion.div
+                      key={session.sessionId}
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.99 }}
+                      className={`group relative rounded-3xl border p-4 text-left transition-all ${
+                        isActive
+                          ? isDarkMode
+                            ? 'border-purple-400/40 bg-purple-500/10'
+                            : 'border-purple-300 bg-purple-50'
+                          : isDarkMode
+                            ? 'border-white/10 bg-white/5 hover:border-purple-400/30 hover:bg-white/10'
+                            : 'border-purple-100 bg-white hover:border-purple-200 hover:bg-purple-50'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onOpenConversation(session)}
+                        className="w-full text-left"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {title}
+                            </p>
+                          </div>
+                          <div className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${isDarkMode ? 'border-white/10 bg-white/5 text-white/40' : 'border-slate-200 bg-white text-slate-500'}`}>
+                            {session.messageCount} msg
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteConversation(session);
+                        }}
+                        className={`absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 ${isDarkMode ? 'border-white/10 bg-white/5 text-white/35 hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-200' : 'border-slate-200 bg-white text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600'}`}
+                        aria-label={`Supprimer ${title}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em]">
+                        <span className={isDarkMode ? 'text-white/35' : 'text-slate-500'}>
+                          MAJ: {session.updatedAt ? new Date(session.updatedAt).toLocaleString('fr-FR') : 'inconnue'}
+                        </span>
+                        {isActive && (
+                          <span className={isDarkMode ? 'text-purple-200' : 'text-purple-700'}>Session active</span>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={`rounded-3xl border p-6 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-purple-100 bg-white'}`}>
+                <p className={`text-sm ${isDarkMode ? 'text-white/55' : 'text-slate-600'}`}>
+                  Aucune session sauvegardée pour le moment.
+                </p>
               </div>
             )}
           </section>

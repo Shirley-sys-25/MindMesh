@@ -6,6 +6,7 @@ import request from 'supertest';
 import { importFresh } from './helpers/load-module.js';
 
 const appPath = path.resolve(process.cwd(), 'backend/public-api/src/app.js');
+const chatRoutesPath = path.resolve(process.cwd(), 'backend/public-api/src/routes/chat.routes.js');
 const authMiddlewarePath = path.resolve(process.cwd(), 'backend/public-api/src/middleware/auth-jwt.js');
 const authorizeScopePath = path.resolve(process.cwd(), 'backend/public-api/src/middleware/authorize-scope.js');
 const chatSchemaPath = path.resolve(process.cwd(), 'backend/public-api/src/schemas/chat.schema.js');
@@ -167,6 +168,14 @@ test('authorize scope strict: scope absent => 403', { concurrency: false }, asyn
     assert.equal(capturedError.status, 403);
     assert.equal(capturedError.code, 'AUTH_FORBIDDEN');
   });
+});
+
+test('DELETE /api/sessions/:session_id reste self-service', { concurrency: false }, async () => {
+  const module = await importFresh(chatRoutesPath);
+  const deleteLayer = module.chatRouter.stack.find((layer) => layer?.route?.path === '/sessions/:session_id' && layer.route.methods.delete);
+
+  assert.ok(deleteLayer, 'route DELETE /sessions/:session_id introuvable');
+  assert.equal(deleteLayer.route.stack.length, 2);
 });
 
 test('schema chat: payload valide normalise', { concurrency: false }, async () => {

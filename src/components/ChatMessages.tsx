@@ -13,15 +13,15 @@ interface ChatMessagesProps {
 
 export function ChatMessages({ messages, isDarkMode, isLoading, userImageUrl }: ChatMessagesProps) {
   const markdownBubbleClass = isDarkMode
-    ? 'prose prose-invert max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-fuchsia-300 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-400 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-fuchsia-200 prose-code:bg-white/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-pre:bg-black/30 prose-pre:border prose-pre:border-white/10'
-    : 'prose prose-slate max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-purple-700 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-500 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-purple-700 prose-code:bg-purple-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-pre:bg-slate-50 prose-pre:border prose-pre:border-purple-100';
+    ? 'prose prose-invert max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-fuchsia-300 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-400 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-fuchsia-200 prose-code:bg-white/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:break-words prose-pre:bg-black/30 prose-pre:border prose-pre:border-white/10 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-img:max-w-full prose-img:h-auto'
+    : 'prose prose-slate max-w-none prose-headings:text-inherit prose-p:my-3 prose-p:leading-relaxed prose-strong:text-inherit prose-em:text-inherit prose-a:text-purple-700 prose-a:no-underline hover:prose-a:underline prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-li:marker:text-purple-500 prose-blockquote:border-purple-400/30 prose-blockquote:text-inherit prose-code:text-purple-700 prose-code:bg-purple-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:break-words prose-pre:bg-slate-50 prose-pre:border prose-pre:border-purple-100 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-img:max-w-full prose-img:h-auto';
 
   return (
     <motion.div
       key="chat"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="w-full h-full flex flex-col gap-6 overflow-y-auto custom-scrollbar p-6 relative z-10 mx-auto"
+      className="w-full h-full flex flex-col gap-6 overflow-y-auto overflow-x-hidden custom-scrollbar p-6 relative z-10 mx-auto"
     >
       {messages.map((m, index) => {
         const isUserMessage = m.role === 'user';
@@ -29,7 +29,7 @@ export function ChatMessages({ messages, isDarkMode, isLoading, userImageUrl }: 
         const isErrorMessage = m.role === 'system' && m.tone === 'error';
 
         return (
-          <div key={index} className={`flex gap-4 ${isUserMessage ? 'justify-end' : ''}`}>
+          <div key={index} className={`flex min-w-0 gap-4 ${isUserMessage ? 'justify-end' : ''}`}>
             {isAssistantMessage && (
               <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-500 border border-purple-500/20 shrink-0">
                 <Brain size={18} />
@@ -42,7 +42,7 @@ export function ChatMessages({ messages, isDarkMode, isLoading, userImageUrl }: 
               </div>
             )}
 
-            <div className={`text-sm leading-relaxed markdown-body ${markdownBubbleClass} ${
+            <div className={`min-w-0 max-w-full text-sm leading-relaxed markdown-body overflow-x-hidden ${markdownBubbleClass} ${
               isUserMessage
                 ? 'w-fit max-w-[80%] px-4 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-br-none shadow-lg shadow-purple-500/20 whitespace-pre-wrap break-words'
                 : isErrorMessage
