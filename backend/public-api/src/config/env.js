@@ -37,8 +37,7 @@ const toList = (value, fallback = []) => {
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
 const authRequired = toBool(process.env.AUTH_REQUIRED, isProd);
-const authBypassFlag = toBool(process.env.AUTH_BYPASS, true);
-const authBypass = isProd ? false : authBypassFlag;
+const authBypass = isProd ? false : toBool(process.env.AUTH_BYPASS, true);
 
 const mode = (process.env.ORCHESTRATION_MODE || 'legacy').trim().toLowerCase();
 const orchestrationMode = ['legacy', 'hybrid', 'crewai'].includes(mode) ? mode : 'legacy';
@@ -59,10 +58,6 @@ if (authRequired && authBypass) {
 
 if (isProd && !authRequired) {
   throw new Error('AUTH_REQUIRED=true est requis en production.');
-}
-
-if (isProd && authBypassFlag) {
-  throw new Error('AUTH_BYPASS=false est requis en production.');
 }
 
 if (authRequired && !authBypass) {

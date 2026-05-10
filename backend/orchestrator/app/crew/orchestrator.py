@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Iterator
 
 from ..core.config import get_settings
@@ -16,13 +15,46 @@ logger = logging.getLogger(__name__)
 
 class MindMeshCrewOrchestrator:
     def __init__(self) -> None:
+        self.settings = get_settings()
         self.agents = build_agents()
         self.agent_specs = {agent["id"]: agent for agent in self.agents}
-        self.settings = get_settings()
         self.knowledge_tool = KnowledgeSearchTool()
 
     def _agent_tools(self) -> list[KnowledgeSearchTool]:
         return [self.knowledge_tool]
+
+    def _build_crewai_llm(self):
+        api_key = self.settings.openai_api_key.strip()
+        model = self.settings.openai_model.strip()
+
+        if not api_key:
+            logger.info("crewai_disabled_missing_openai_key")
+            return None
+
+        if not model:
+            logger.info("crewai_disabled_missing_openai_model")
+            return None
+
+        try:
+            from crewai import LLM
+        except Exception as error:  # noqa: BLE001
+            logger.warning("crewai_import_failed", extra={"error": str(error)})
+            return None
+
+        llm_kwargs = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": self.settings.openai_base_url or "https://build.lewisnote.com/v1",
+        }
+
+        try:
+            try:
+                return LLM(**llm_kwargs, extra_body={"reasoning_effort": "high"})
+            except TypeError:
+                return LLM(**llm_kwargs, model_kwargs={"reasoning_effort": "high"})
+        except Exception as error:  # noqa: BLE001
+            logger.warning("crewai_llm_init_failed", extra={"error": str(error)})
+            return None
 
     @staticmethod
     def _latest_user_message(messages: list[dict[str, str]]) -> str:
@@ -39,29 +71,18 @@ class MindMeshCrewOrchestrator:
     def _run_with_crewai(self, latest_user_message: str) -> str | None:
         if self.settings.orchestrator_engine == "skeleton":
             return None
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            logger.info("crewai_disabled_missing_openai_key")
+
+        llm = self._build_crewai_llm()
+        if llm is None:
             return None
 
         try:
-            from crewai import Agent, Crew, LLM, Task
+            from crewai import Agent, Crew, Task
         except Exception as error:  # noqa: BLE001
             logger.warning("crewai_import_failed", extra={"error": str(error)})
             return None
 
-        llm_kwargs = {
-            "model": "gpt-5.5",
-            "api_key": api_key,
-            "base_url": self.settings.openai_base_url or "https://build.lewisnote.com/v1",
-        }
-
         try:
-            try:
-                llm = LLM(**llm_kwargs, extra_body={"reasoning_effort": "high"})
-            except TypeError:
-                llm = LLM(**llm_kwargs, model_kwargs={"reasoning_effort": "high"})
-
             afri_spec = self.agent_specs["AfriConnect"]
             analyste_spec = self.agent_specs["Analyste Marche"]
             stratege_spec = self.agent_specs["Stratege SEO"]
@@ -142,37 +163,47 @@ class MindMeshCrewOrchestrator:
 
     def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
         latest_user_message = self._latest_user_message(messages)
+        total_milestones = 5
+
+        def emit_objective_progress(step: int, label: str, status: str = 'working') -> Iterator[str]:
+            progress = min(100, int(round(step / total_milestones * 100)))
+            payload = {
+                'objective_step': step,
+                'objective_progress': progress,
+                'milestone': label,
+                'status': status,
+                'total_milestones': total_milestones,
+            }
+            yield self._sse_block('objective_step', payload)
+            yield self._sse_block('objective_progress', payload)
 
         if self.settings.orchestrator_engine == "skeleton":
+            yield from emit_objective_progress(1, 'orchestrator_ready')
             yield self._sse_block("message", self._build_skeleton_content(latest_user_message))
+            yield from emit_objective_progress(total_milestones, 'response_ready', 'complete')
             yield self._sse_block("done", "[DONE]")
             return
 
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
+        llm = self._build_crewai_llm()
+        if llm is None:
+            yield from emit_objective_progress(1, 'orchestrator_ready')
             yield self._sse_block("message", self._build_skeleton_content(latest_user_message))
+            yield from emit_objective_progress(total_milestones, 'response_ready', 'complete')
             yield self._sse_block("done", "[DONE]")
             return
 
         try:
-            from crewai import Agent, Crew, LLM, Task
+            from crewai import Agent, Crew, Task
         except Exception as error:  # noqa: BLE001
             logger.warning("crewai_import_failed", extra={"error": str(error)})
+            yield from emit_objective_progress(1, 'orchestrator_ready')
             yield self._sse_block("message", self._build_skeleton_content(latest_user_message))
+            yield from emit_objective_progress(total_milestones, 'response_ready', 'complete')
             yield self._sse_block("done", "[DONE]")
             return
 
-        llm_kwargs = {
-            "model": "gpt-5.5",
-            "api_key": api_key,
-            "base_url": self.settings.openai_base_url or "https://build.lewisnote.com/v1",
-        }
-
         try:
-            try:
-                llm = LLM(**llm_kwargs, extra_body={"reasoning_effort": "high"})
-            except TypeError:
-                llm = LLM(**llm_kwargs, model_kwargs={"reasoning_effort": "high"})
+            yield from emit_objective_progress(1, 'request_accepted')
 
             stages = [
                 {
@@ -207,7 +238,7 @@ class MindMeshCrewOrchestrator:
             stage_outputs: list[str] = []
             previous_context = latest_user_message.strip()
 
-            for stage in stages:
+            for stage_index, stage in enumerate(stages, start=1):
                 yield self._sse_block("agent_status", {"agent": stage["id"], "status": "working"})
 
                 agent_spec = self.agent_specs[stage["id"]]
@@ -238,8 +269,13 @@ class MindMeshCrewOrchestrator:
 
                 yield self._sse_block("agent_status", {"agent": stage["id"], "status": "idle"})
 
+                milestone_step = min(stage_index + 1, total_milestones - 1)
+                yield from emit_objective_progress(milestone_step, f"stage_complete:{stage['id']}")
+
             if not stage_outputs:
                 yield self._sse_block("message", self._build_skeleton_content(latest_user_message))
+
+            yield from emit_objective_progress(total_milestones, 'response_ready', 'complete')
 
             yield self._sse_block("done", "[DONE]")
         except Exception as error:  # noqa: BLE001

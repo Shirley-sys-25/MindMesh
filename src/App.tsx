@@ -12,6 +12,7 @@ import { useVoiceTranscription } from './hooks/useVoiceTranscription.ts';
 import AuthView from './components/AuthView';
 import AdminDashboardView from './components/AdminDashboardView';
 import DashboardView from './components/DashboardView';
+import MainLayout from './components/MainLayout';
 import PricingModal from './components/PricingModal';
 import SettingsView from './components/SettingsView';
 import { useBackendSnapshot } from './hooks/useBackendSnapshot';
@@ -20,6 +21,7 @@ import { useChatHistory } from './hooks/useChatHistory';
 import { useChatPromptSender } from './hooks/useChatPromptSender';
 import { useSessionStateSync } from './hooks/useSessionStateSync';
 import { useWorkspaceNotice } from './hooks/useWorkspaceNotice';
+import { readErrorPayload } from './lib/apiErrors';
 import {
   type Agent,
   type AttachmentPreview,
@@ -435,7 +437,8 @@ export default function App() {
         });
 
         if (!response.ok) {
-          throw new Error(`DELETE_FAILED_${response.status}`);
+          const { code, message: apiMessage } = await readErrorPayload(response);
+          throw new Error(`${code || `DELETE_FAILED_${response.status}`}: ${apiMessage || `Erreur HTTP ${response.status}`}`);
         }
 
         if (conversation.sessionId === sessionId) {
@@ -453,7 +456,19 @@ export default function App() {
         await refreshConversationSessions();
       } catch (error) {
         console.error('Suppression conversation impossible:', error);
-        showWorkspaceNotice('warn', 'Suppression impossible pour le moment.');
+        const rawErrorMessage = error instanceof Error ? error.message : '';
+        const cleanedErrorMessage = rawErrorMessage.replace(/^[A-Z0-9_]+:\s*/, '').trim();
+
+        let noticeMessage = cleanedErrorMessage || 'Suppression impossible pour le moment.';
+        if (/AUTH_|401/i.test(rawErrorMessage)) {
+          noticeMessage = 'Session expirée ou authentification manquante. Reconnectez-vous puis réessayez.';
+        } else if (/403/i.test(rawErrorMessage)) {
+          noticeMessage = 'Permissions insuffisantes pour supprimer cette conversation.';
+        } else if (/404/i.test(rawErrorMessage)) {
+          noticeMessage = 'Conversation introuvable ou déjà supprimée.';
+        }
+
+        showWorkspaceNotice('warn', noticeMessage);
       }
     },
     [API_BASE_URL, getAuthorizationHeaders, refreshConversationSessions, resetChatUiState, sessionId, showWorkspaceNotice],
@@ -619,6 +634,60 @@ export default function App() {
     return <SettingsView isDarkMode={isDarkMode} onNavigate={navigate} />;
   }
 
+  return (
+    <MainLayout
+      user={user}
+      isDarkMode={isDarkMode}
+      setIsDarkMode={setIsDarkMode}
+      isAdmin={isAdmin}
+      isSigningOut={isSigningOut}
+      currentView={currentView}
+      setCurrentView={setCurrentView}
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      messages={messages}
+      message={message}
+      setMessage={setMessage}
+      setSecurityScore={setSecurityScore}
+      isLoading={isLoading}
+      isRecording={isRecording}
+      isExecutingWorkspace={isExecutingWorkspace}
+      latencyMs={latencyMs}
+      securityScore={securityScore}
+      sessionLogs={sessionLogs}
+      agentStatuses={agentStatuses}
+      currentObjective={currentObjective}
+      objectiveProgress={objectiveProgress}
+      objectiveStep={objectiveStep}
+      objectiveHistory={objectiveHistory}
+      sessionSummary={sessionSummary}
+      conversationSessions={conversationSessions}
+      isLoadingConversationSessions={isLoadingConversationSessions}
+      sessionId={sessionId}
+      backendSnapshot={backendSnapshot}
+      metricsSnapshot={metricsSnapshot}
+      isRefreshingSnapshot={isRefreshingSnapshot}
+      refreshBackendSnapshot={refreshBackendSnapshot}
+      navigate={navigate}
+      handleSignOut={handleSignOut}
+      handleNewChat={handleNewChat}
+      clearObjective={clearObjective}
+      openConversationSession={openConversationSession}
+      handleDeleteConversation={handleDeleteConversation}
+      sendPrompt={sendPrompt}
+      toggleRecording={toggleRecording}
+      pushSessionLog={pushSessionLog}
+      showWorkspaceNotice={showWorkspaceNotice}
+      workspaceNotice={workspaceNotice}
+      attachmentPreviews={attachmentPreviews}
+      attachmentInputRef={attachmentInputRef}
+      messageInputRef={messageInputRef}
+      setAttachmentPreviews={setAttachmentPreviews}
+      onAttachmentSelection={onAttachmentSelection}
+      removeAttachment={removeAttachment}
+    />
+  );
+
   const handleDownloadWorkspace = () => {
     const exportText = latestAssistantMessage.trim();
     if (!exportText) {
@@ -679,7 +748,7 @@ export default function App() {
     }
   };
 
-  const resetSession = () => {
+  function resetSession() {
     setMessages([]);
     setMessage('');
     setSessionLogs([]);
@@ -700,7 +769,7 @@ export default function App() {
       }
     }
     setSessionId(nextSessionId);
-  };
+  }
 
   const handleSend = async () => {
     const selectedAttachments = attachmentPreviews;
@@ -1013,21 +1082,21 @@ export default function App() {
               </div>
 
               {showMenu && (
-                <div className="absolute bottom-20 left-4 right-4 glass bg-white/95 dark:bg-black/80 backdrop-blur-xl p-2 rounded-xl border border-gray-200 dark:border-white/10 flex flex-col gap-1 z-50 shadow-2xl">
+                <div className={`absolute bottom-20 left-4 right-4 z-50 flex flex-col gap-1 rounded-xl border p-2 backdrop-blur-xl ${isDarkMode ? 'border-slate-700 bg-slate-800 text-white shadow-[0_20px_50px_rgba(15,23,42,0.35)]' : 'border-gray-200 bg-white text-slate-800 shadow-lg'}`}>
                   <button
                     type="button"
                     onClick={handleOpenUpgrade}
-                    className="w-full text-left flex items-center gap-3 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-all border border-purple-500 shadow-[0_0_12px_rgba(168,85,247,0.25)] bg-purple-500/10 dark:bg-purple-500/20 font-bold text-purple-700 dark:text-purple-300"
+                    className={`flex w-full items-center gap-3 rounded-lg border px-4 py-2 text-left text-sm font-bold transition-colors ${isDarkMode ? 'border-purple-500/30 bg-purple-500/20 text-purple-300 hover:bg-slate-700' : 'border-purple-500 bg-purple-500/10 text-purple-700 hover:bg-gray-100'}`}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
                     Passer Pro
                   </button>
-                  <button onClick={() => navigate('/settings')} className="w-full text-left flex items-center gap-3 px-4 py-2 text-sm text-[var(--text)] hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors">
+                  <button onClick={() => navigate('/settings')} className={`flex w-full items-center gap-3 rounded-lg px-4 py-2 text-left text-sm transition-colors ${isDarkMode ? 'text-slate-100 hover:bg-slate-700' : 'text-slate-800 hover:bg-gray-100'}`}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     Paramètres
                   </button>
-                  <div className="h-px bg-gray-200 dark:bg-white/10 my-1"></div>
-                  <button onClick={() => void handleSignOut()} disabled={isSigningOut} className="w-full text-left flex items-center gap-3 px-4 py-2 text-sm text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-colors font-medium disabled:opacity-70">
+                  <div className={`my-1 h-px ${isDarkMode ? 'bg-slate-700' : 'bg-gray-200'}`} />
+                  <button onClick={() => void handleSignOut()} disabled={isSigningOut} className={`flex w-full items-center gap-3 rounded-lg px-4 py-2 text-left text-sm font-medium transition-colors disabled:opacity-70 ${isDarkMode ? 'text-red-300 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50'}`}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                     {isSigningOut ? 'Déconnexion en cours...' : 'Déconnexion'}
                   </button>

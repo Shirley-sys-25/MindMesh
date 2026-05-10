@@ -26,7 +26,7 @@ export const writeSseData = (res, payload) => {
 export const writeSseEvent = (res, eventName, payload) => {
   const safeEvent = eventName || 'message';
   const safePayload = payload ?? '';
-  const serialized = serializeSseBlock(String(safePayload));
+  const serialized = serializeSseBlock(safePayload);
   res.write(`event: ${safeEvent}\n${serialized}\n\n`);
 };
 

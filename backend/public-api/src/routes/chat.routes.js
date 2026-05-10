@@ -137,6 +137,11 @@ const streamChatHandler = async (req, res, next) => {
           continue;
         }
 
+        if (event.type === 'objective_step' || event.type === 'objective_progress') {
+          writeSseEvent(res, event.type, event.payload || '{}');
+          continue;
+        }
+
         if (event.type === 'done') {
           streamEnded = true;
           recordOrchestratorCall(env.orchestrationMode, 'ok');
@@ -162,6 +167,8 @@ const streamChatHandler = async (req, res, next) => {
           });
           return res.end();
         }
+
+        writeSseEvent(res, event.type, event.payload || '');
       }
 
       if (!streamEnded) {

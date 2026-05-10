@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -115,6 +116,31 @@ const withMockedFetch = async (mockImpl, callback) => {
   }
 };
 
+const withProcessEnvPatch = async (patch, callback) => {
+  const previous = {};
+
+  for (const [key, value] of Object.entries(patch)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await callback();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
 test('auth middleware bypass: injecte req.auth', { concurrency: false }, async () => {
   const module = await importFresh(authMiddlewarePath);
   const req = { headers: {} };
@@ -128,6 +154,41 @@ test('auth middleware bypass: injecte req.auth', { concurrency: false }, async (
   assert.equal(called, true);
   assert.equal(req.auth.sub, 'dev-user');
   assert.ok(Array.isArray(req.auth.scopes));
+});
+
+test('auth middleware production: AUTH_BYPASS force a false', { concurrency: false }, async () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    const envModule = await import(${JSON.stringify(pathToFileURL(envPath).href)});
+    const authModule = await import(${JSON.stringify(pathToFileURL(authMiddlewarePath).href)});
+
+    assert.equal(envModule.env.isProd, true);
+    assert.equal(envModule.env.authBypass, false);
+
+    const req = { headers: {} };
+    let capturedError;
+
+    await authModule.authJwtMiddleware(req, {}, (error) => {
+      capturedError = error;
+    });
+
+    assert.equal(capturedError.status, 401);
+    assert.equal(capturedError.code, 'AUTH_MISSING_TOKEN');
+    assert.equal(req.auth, undefined);
+  `;
+
+  execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      AUTH_REQUIRED: 'true',
+      AUTH_BYPASS: 'true',
+      AUTH_JWKS_URI: 'https://example.com/.well-known/jwks.json',
+      AUTH_ISSUER: 'https://issuer.example.com',
+      AUTH_AUDIENCE: 'mindmesh-api',
+    },
+    encoding: 'utf8',
+  });
 });
 
 test('auth middleware strict: token manquant => 401', { concurrency: false }, async () => {

@@ -16,7 +16,7 @@ const plans = [
     accent: 'from-slate-500/30 to-slate-400/10',
     icon: ShieldCheck,
     buttonLabel: 'Commencer gratuitement',
-    buttonStyle: 'border border-emerald-600/30 bg-emerald-600 text-black hover:text-black shadow-lg shadow-emerald-600/25 hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-400/60 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10',
+    buttonStyle: 'border border-emerald-600/30 !bg-emerald-400 !text-black font-bold hover:!text-black shadow-lg shadow-emerald-600/25 hover:!bg-emerald-500 focus-visible:ring-2 focus-visible:ring-emerald-400/60 dark:border-white/10 dark:bg-white/5 dark:!text-white dark:hover:bg-white/10',
     buttonDisabled: false,
     features: [
       'Assistant conversationnel pour vos questions rapides',

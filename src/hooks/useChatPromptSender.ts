@@ -11,6 +11,15 @@ import {
 
 const knownAgentIds = new Set(['africonnect', 'analyste_marche', 'stratege_seo']);
 
+const clampStep = (value: number) => Math.max(0, Math.min(5, value));
+
+const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+
+const toFiniteNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
 };
@@ -97,6 +106,8 @@ export const useChatPromptSender = ({
     const requestStartedAt = Date.now();
     let latencyCaptured = false;
     let didLogCompletion = false;
+    let latestObjectiveStep: number | null = null;
+    let latestObjectiveProgress: number | null = null;
 
     const captureLatency = () => {
       if (latencyCaptured) return;
@@ -116,11 +127,24 @@ export const useChatPromptSender = ({
     });
     setMessage('');
     setIsLoading(true);
-    setObjectiveStep((prev) => Math.min(prev + 1, 5));
-    setObjectiveProgress((prev) => Math.min(prev + 20, 100));
 
     pushSessionLog('Awaiting sync...');
     pushSessionLog('Routing to orchestrator...');
+
+    const applyObjectiveSignal = (objectiveStep?: unknown, objectiveProgress?: unknown) => {
+      const nextObjectiveStep = toFiniteNumber(objectiveStep);
+      const nextObjectiveProgress = toFiniteNumber(objectiveProgress);
+
+      if (nextObjectiveStep !== null) {
+        latestObjectiveStep = Math.max(latestObjectiveStep ?? 0, nextObjectiveStep);
+        setObjectiveStep((prev) => Math.max(prev, clampStep(latestObjectiveStep ?? 0)));
+      }
+
+      if (nextObjectiveProgress !== null) {
+        latestObjectiveProgress = Math.max(latestObjectiveProgress ?? 0, nextObjectiveProgress);
+        setObjectiveProgress((prev) => Math.max(prev, clampPercent(latestObjectiveProgress ?? 0)));
+      }
+    };
 
     try {
       const authHeaders = await getAuthorizationHeaders();
@@ -226,6 +250,8 @@ export const useChatPromptSender = ({
                   const mappedAgent = typeof parsedStatus.agent === 'string' ? parsedStatus.agent.trim().toLowerCase() : '';
                   const nextStatus = parsedStatus.status === 'working' ? 'working' : 'idle';
 
+                  applyObjectiveSignal(parsedStatus.objective_step, parsedStatus.objective_progress);
+
                   if (mappedAgent && knownAgentIds.has(mappedAgent)) {
                     setAgentStatuses((prev) => ({
                       ...prev,
@@ -253,6 +279,20 @@ export const useChatPromptSender = ({
                 // noop
               }
               throw new Error(`CHAT_STREAM_ERROR: ${streamErrorMessage}`);
+            }
+
+            if (eventType === 'objective_step' || eventType === 'objective_progress') {
+              try {
+                const parsedObjectiveSignal: unknown = JSON.parse(payload);
+                if (isRecord(parsedObjectiveSignal)) {
+                  applyObjectiveSignal(parsedObjectiveSignal.objective_step, parsedObjectiveSignal.objective_progress);
+                } else {
+                  applyObjectiveSignal(eventType === 'objective_step' ? payload : undefined, eventType === 'objective_progress' ? payload : undefined);
+                }
+              } catch {
+                applyObjectiveSignal(eventType === 'objective_step' ? payload : undefined, eventType === 'objective_progress' ? payload : undefined);
+              }
+              continue;
             }
 
             assistantText += payload;
